@@ -40,15 +40,12 @@ class UserManager extends Manager {
 				if($role_bean->id){
 					self::$role_bean = $role_bean;
 				}else{
-					if(self::getGuestMode() && self::$member_bean->login == 'guest'){
-						self::$member_bean->role = R::findOne('role', 'rolename = ?', array("guest"));
+					if(self::isAdminExistent()){
+						self::$member_bean->role = R::findOne('role', 'rolename = ?', array("member")); 
 					}else{
-						if(self::isAdminExistent()){
-							self::$member_bean->role = R::findOne('role', 'rolename = ?', array("member")); 
-						}else{
-							self::$member_bean->role = R::findOne('role', 'rolename = ?', array("admin"));
-						}
+						self::$member_bean->role = R::findOne('role', 'rolename = ?', array("admin"));
 					}
+					R::freeze(false);
 					R::begin();
 					try{
 						$mid = R::store($member_bean);
@@ -60,6 +57,7 @@ class UserManager extends Manager {
 						unset(self::$member_bean);
 						unset(self::$role_bean);
 					}
+					R::freeze(true);
 				}
 			}
 		}
@@ -74,6 +72,9 @@ class UserManager extends Manager {
 		$member = R::dispense('member');
 		$member->login = "guest";
 		$member->loginable = false;
+		$member->role = self::registerRole("guest");
+		R::freeze(false);
+		R::begin();
 		try{
 			$mid = R::store($member);
 			R::commit();
@@ -81,6 +82,7 @@ class UserManager extends Manager {
 		}catch(Exception $e){
 			R::rollback();
 		}
+		R::freeze(true);
 		return $member;
 	}
 	
@@ -92,12 +94,16 @@ class UserManager extends Manager {
 	private static function initializeContentForUser(){
 		if(isset(self::$member_bean) && isset(self::$role_bean)){
 			$contents = self::getContentsForUser();
+			$allowed = false;
 			if(sizeof($contents)){
 				foreach($contents as $content){
 					ContentManager::assignToSmarty("allowed_for_".$content['modulename'].'_'.$content['contentname'], true);
+					if($content['modulename'] == self::getModule() && $content['contentname'] == self::getContent()){
+						$allowed = true;
+					}
 				}
 			}
-			if(self::isAllowedFor() === false){
+			if($allowed === false){
 				self::$function = "viewNotAllowed";
 			}
 			return true;
@@ -116,11 +122,11 @@ class UserManager extends Manager {
 	 */
 	private static function getContentsForUser(){
 		return R::getAll("SELECT content.contentname, module.modulename FROM
-								content, module, content_module, roletomodcon
-								WHERE content.id = content_module.content_id
-								AND module.id = content_module.module_id
-								AND roletomodcon.content_module_id = content_module.id
-								AND roletomodcon.role_id = ? ", array(self::$role_bean->id));
+								content, module, controller, permission
+								WHERE content.id = controller.content_id
+								AND module.id = controller.module_id
+								AND permission.controller_id = controller.id
+								AND permission.role_id = ? ", array(self::$role_bean->id));
 	}
 	
 	/**
@@ -146,82 +152,55 @@ class UserManager extends Manager {
 	 */
 	public static function refreshInitialContent(){
 		if(self::getGuestMode()){
-			self::createRoleContents("guest", self::getGuestContents() + array(self::$default_content_error['module'].'_'.self::$default_content_error['content']));
+			self::createRoleContents("guest", self::getGuestContents());
 		}
-		self::createRoleContents("member", self::getUserContents() + array(self::$default_content_error['module'].'_'.self::$default_content_error['content']));
+		self::createRoleContents("member", self::getUserContents());
 		self::createAdminContent();
 	}
 	
 	/**
-	 * Function to create the initial content within the database. 
-	 * Information is stored via Manager::setGuestContents() || Manager::setUserContents();
+	 * Function to create the initial content within the database for specified rolename.
+	 * If role is not existent, it will create the role. 
 	 * 
 	 * @param string $rolename
-	 * @param array $membercontents
+	 * @param array $contents
 	 */
 	public static function createRoleContents($rolename, $contents){
-		$role_bean = self::registerRole($rolename);
-		foreach($contents as $membercontent){
-			$tmp = explode('_', $membercontent);
-			$module = $tmp[0];
-			$content = $tmp[1];
-			$module_bean = R::findOne('module', 'modulename = ?', array($module));
-			$content_bean = R::findOne('content', 'contentname = ?', array($content));
-			if($module_bean->id && $content_bean->id){
-				$sharedModuleContent = R::findOne('content_module', 'module_id = :mid AND content_id = :cid', array(':mid' => $module_bean->id, ':cid' => $content_bean->id));
-				if($sharedModuleContent->id){
-					$assignedroles = $sharedModuleContent->via('roletomodcon')->sharedRoleList;
-					$check = false;
-					foreach($assignedroles as $assignedrole){
-						if($assignedrole->id == $role_bean->id){
-							$check = true;
+		R::freeze(false);
+		R::begin();
+		try{
+			$role_bean = self::registerRole($rolename);
+			$permissions = array();
+			foreach($contents as $role_content){
+				$tmp = explode('_', $role_content);
+				$module = $tmp[0];
+				$content = $tmp[1];
+				$module_bean = R::findOne('module', 'modulename = ?', array($module));
+				$content_bean = R::findOne('content', 'contentname = ?', array($content));
+				if($module_bean->id && $content_bean->id){
+					$controller = R::findOne('controller', 'module_id = :mid AND content_id = :cid', array(':mid' => $module_bean->id, ":cid" => $content_bean->id));
+					if($controller->id){
+						$permission = R::findOne('permission', 'role_id = :r_id AND controller_id = :c_id', array(":r_id" => $role_bean->id, ":c_id" => $controller->id));
+						if($permission->id == 0){
+							$permission = R::dispense('permission');
+							$permission->controller = $controller;
+							$permission->role = $role_bean;
 						}
-					}
-					if($check == false){
-						$role_bean->link('roletomodcon')->contentModule = $sharedModuleContent;
+						$permissions[] = $permission;
 					}
 				}
 			}
-		}
-		R::begin();
-		try{
-			$roleid = R::store($role_bean);
-			R::commit();
+			if(sizeof($permissions) > 0){
+				$p_ids = R::storeAll($permissions);
+				R::exec('DELETE FROM permission WHERE id NOT IN ('.R::genSlots($p_ids).') AND role_id = '.$role_bean->id, $p_ids);
+			}else{
+				R::exec('DELETE FROM permission WHERE role_id = ?', array($role_bean->id));
+			}
 		}catch(Exception $e){
 			R::rollback();
 			return false;
 		}
-		$role_bean = R::load('role', $roleid);
-		$roletomodcons = $role_bean->ownRoletomodconList;
-		foreach($roletomodcons as $roletomodcon){
-			$contentModule = $roletomodcon->contentModule;
-			if(!$contentModule->id){
-				unset($role_bean->ownRoletomodconList[$roletomodcon->id]);
-				$roleid = R::store($role_bean);
-				$role_bean = R::load('role', $roleid);
-				R::trash($roletomodcon);
-			}else{
-				$registeredContent = $contentModule->content;
-				$registeredModule = $contentModule->module;
-				if($registeredContent->id && $registeredModule->id){
-					$check = false;
-					foreach($contents as $membercontent){
-						$tmp = explode('_', $membercontent);
-						$module = $tmp[0];
-						$content = $tmp[1];
-						if($module == $registeredModule->modulename && $content == $registeredContent->contentname){
-							$check = true;
-						}
-					}
-					if($check == false){
-						unset($role_bean->ownRoletomodcon[$roletomodcon->id]);
-						$roleid = R::store($role_bean);
-						$role_bean = R::load('role', $roleid);
-						R::trash($roletomodcon);
-					}
-				}
-			}
-		}
+		R::freeze(true);
 		return true;
 	}
 	
@@ -231,38 +210,32 @@ class UserManager extends Manager {
 	 * @return boolean
 	 */
 	public static function createAdminContent(){
-		$role_bean = self::registerRole('admin');
-		$roletomodcons = $role_bean->ownRoletomodconList;
-		foreach($roletomodcons as $roletomodcon){
-			$contentModule = $roletomodcon->contentModule;
-			if(!$contentModule->id){
-				unset($role_bean->ownRoletomodconList[$roletomodcon->id]);
-				$roleid = R::store($role_bean);
-				$role_bean = R::load('role', $roleid);
-				R::trash($roletomodcon);
-			}
-		}
-		$sharedModuleContents = R::findAll('content_module');
-		foreach($sharedModuleContents as $sharedModuleContent){
-			$assignedroles = $sharedModuleContent->via('roletomodcon')->sharedRoleList;
-			$check = false;
-			foreach($assignedroles as $assignedrole){
-				if($assignedrole->id == $role_bean->id){
-					$check = true;
-				}
-			}
-			if($check == false){
-				$role_bean->link('roletomodcon')->contentModule = $sharedModuleContent;
-			}
-		}
+		R::freeze(false);
 		R::begin();
 		try{
-			R::store($role_bean);
-			R::commit();
+			$role_bean = self::registerRole('admin');
+			$controllers = R::find('controller');
+			$permissions = array();
+			if(sizeof($controllers) > 0){
+				foreach($controllers as $controller){
+					$permission = R::findOne('permission', 'controller_id = :c_id AND role_id = :r_id', array(":c_id" => $controller->id, ":r_id" => $role_bean->id));
+					if($permission->id == 0){
+						$permission = R::dispense('permission');
+						$permission->controller = $controller;
+						$permission->role = $role_bean;
+					}
+					$permissions[] = $permission;
+				}
+				$p_ids = R::storeAll($permissions);
+				R::exec('DELETE FROM permission WHERE id NOT IN ('.R::genSlots($p_ids).') AND role_id = '.$role_bean->id, $p_ids);
+			}else{
+				R::wipe('permission');
+			}
 		}catch(Exception $e){
 			R::rollback();
 			return false;
 		}
+		R::freeze(true);
 		return true;
 	}
 	
@@ -283,28 +256,6 @@ class UserManager extends Manager {
 			$role_bean = R::load('role', $roleid);
 			return $role_bean;
 		}
-	}
-	
-	/**
-	 * Checks if current logged in user is allowed to view requested content.
-	 *
-	 */
-	private static function isAllowedFor(){
-		$module_bean = R::findOne('module', 'modulename = ?', array(self::getModule()));
-		$content_bean = R::findOne('content', 'contentname = ? ', array(self::getContent()));
-		if($content_bean->id && $module_bean->id){
-			$contentmodule = R::findOne('content_module', 'module_id = :mid AND content_id = :cid',
-					array(':mid' => $module_bean->id, ':cid' => $content_bean->id));
-			if($contentmodule->id){
-				$assignedroles = $contentmodule->via('roletomodcon')->sharedRole;
-				foreach($assignedroles as $assignedrole){
-					if($assignedrole->id == self::$role_bean->id){
-						return true;
-					}
-				}
-			}
-		}
-		return false;
 	}
 	
 	/**
@@ -387,7 +338,7 @@ class UserManager extends Manager {
 	 */
 	public static function setRoleForUser($login, $rolename){
 		if(self::isUserExistent($login) === false){
-			throw new Exception("Member with givne login doesn't exist.");
+			throw new Exception("Member with given login doesn't exist.");
 		}
 		$member_bean = R::findOne('member', 'login = :login', array(":login" => $login));
 		$role_bean = R::findOne('role', 'rolename = :rolename', array(":rolename" => $rolename));
@@ -506,14 +457,17 @@ class UserManager extends Manager {
 		$member->login = $login;
 		$member->password = self::hashpassword($password);
 		$member->loginable = true;
+		R::freeze(false);
 		R::begin();
 		try{
 			R::store($member);
 			R::commit();
 		}catch(Exception $e){
 			R::rollback();
+			R::freeze(true);
 			return false;
 		}
+		R::freeze(true);
 		return true;
 	}
 	

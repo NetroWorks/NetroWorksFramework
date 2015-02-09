@@ -35,7 +35,7 @@ class Manager {
 		$help = file_get_contents(realpath(dirname(__FILE__)).'/../README');
 		if(isset($_SERVER['HTTP_USER_AGENT'])){
 			$help = nl2br($help);
-		}
+		} 
 		echo $help;
 		exit();
 	}
@@ -152,7 +152,7 @@ class Manager {
 	 */
 	public static function setupORM($type, $host, $db, $user, $password){
 		try{
-			R::addDatabase(self::getProject(), $type.":host=".$host.";dbname=".$db, $user, $password, false);
+			R::addDatabase(self::getProject(), $type.":host=".$host.";dbname=".$db, $user, $password, true);
 			R::selectDatabase(self::getProject());
 			if(R::testConnection() === false){
 				throw new Exception("Failed to open connection.");
@@ -242,6 +242,7 @@ class Manager {
 	public static function setUserContents($contents){
 		if(is_array($contents)){
 			self::$user_contents = $contents;
+			self::$user_contents[] = self::$default_content_error['module'].'_'.self::$default_content_error['content'];
 		}else{
 			self::setUserMode(false);
 		}
@@ -265,6 +266,7 @@ class Manager {
 	public static function setGuestContents($contents){
 		if(is_array($contents)){
 			self::$guest_contents = $contents;
+			self::$guest_contents[] = self::$default_content_error['module'].'_'.self::$default_content_error['content'];
 		}else{
 			self::setGuestMode(false);
 		}
@@ -373,7 +375,7 @@ class Manager {
 	 * @param string $module
 	 * @return boolean
 	 */
-	public static function setModule($module){
+	protected static function setModule($module){
 		$module = self::sanitizeInput($module);
 		self::$requested_module = $module;
 		if(is_string($module) && strlen($module) > 0){
@@ -418,7 +420,7 @@ class Manager {
 	 * @throws Exception
 	 * @return boolean
 	 */
-	public static function setContent($content){
+	protected static function setContent($content){
 		$content = self::sanitizeInput($content);
 		self::$requested_content = $content;
 		if(isset(self::$content)){
@@ -467,7 +469,7 @@ class Manager {
 	 * @throws Exception
 	 * @return boolean
 	 */
-	public static function setFunction($function){
+	protected static function setFunction($function){
 		$function = self::sanitizeInput($function);
 		self::$requested_function = $function;
 		if(isset(self::$function)){
@@ -536,7 +538,7 @@ class Manager {
 	 * 
 	 * @return boolean
 	 */
-	public static function loadController(){
+	protected static function loadController(){
 		if(isset(self::$module) === false || isset(self::$content) === false){
 			throw new Exception("Controller cannot be loaded. Controller is not specified.");
 		}
@@ -555,7 +557,7 @@ class Manager {
 	 * 
 	 * @throws Exception
 	 */
-	public static function performFunction(){
+	protected static function performFunction(){
 		if(isset(self::$controller) === false){
 			throw new Exception("Function cannot be loaded. No Controller instanciated.");
 		}

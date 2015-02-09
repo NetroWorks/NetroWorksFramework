@@ -247,6 +247,7 @@ within your database and assign given values to the user. Afterwards you can acc
 This function will return the current logged in loginname, hardly if `$login` is set to `true` otherwise the function will check if attributes `name` and `surname`
 are set within the "member" table and returns a String of that. Capitalized. 
 Example: Having a Member like following table:
+
 login | name | surname | email | password | loginable
 ----- | ---- | ------- | ----- | -------- | ---------
 netroworks | netro | works | netroworks@systems.tld | xxxx | 1
@@ -295,7 +296,7 @@ With this URI the `ContentManager` will try to allocate the module folder "core"
 tries  to find the file `LoginPage.php` within that folder. Afterwards it will try to call the function `index()`. 
 
 **So the definition here is:**
-*Your HTTP-Request should always be defined as http://yourpage.com/index.php/<modulename>/<contentname>/<functionname>/*
+*Your HTTP-Request should always be defined as http://yourpage.com/index.php/\<modulename\>/\<contentname\>/\<functionname\>/*
 
 You are able to pass additional params after the trailing slash of <functionname>. Separeted by "/".
 All params passed this way will be available within the controller function call. 
@@ -306,10 +307,8 @@ All params passed this way will be available within the controller function call
 The function `LoginPage::index()` will be called and the additional params `param1`,`param2`, `param3` will be passed as an array to the function index.
 So if you create a funciton called "index" and want to have the additional params available you will have to declare your function as 
 
-	```php
 	public function index($params)
-	```
-
+	
 As you recognized your functions within your controller, which should be available for access should always be named 
 as the same for the HTTP-Request. Same for folder and controller. As this is the only way having the ContentManager to allocate
 the correct Controller.
@@ -318,7 +317,8 @@ the correct Controller.
 Views are just simple HTML templates. All functionalites of Smarty Template Engine are available within here. So please visit 
 the Smarty Documentation page here to get more details.
 
-*The only Question to be answered: **How can I assign a template to a controller?** *
+*The only Question to be answered:* 
+**How can I assign a template to a controller?**
  
 - All controller will have the function `Controller::addView($viewname)` available. 
 
@@ -386,42 +386,182 @@ As this class is intended to be handled as an object, you do have also the __con
 This function will, as the name says, build the connection to the specified database. 
 As the Model parent class does use the RedBeanPHP classes it will let you switch between different databases.
 
-	- Model::query()
+	- Model::query($query, $bindings = NULL)
 
 This functions will switch to the specified Database, performs the given query, switch back to project specific database and returns the result
 as an assoc array. Having for each Dataset row an indexed array entry and named keys for the query attributes.
 You are also able to use anykind of namespaces within your sql and provide and assoc array for binding values. 
-The `Model::query()` function uses the R::getAll() function from RedBeanPHP. Please look at their homepage for usage. 
+The `Model::query()` function uses the R::getAll() function from RedBeanPHP. Please look at their homepage for usage.
 
+	- Model::insert($query, $bindings = NULL)
 	
-Notice: As the Model class will associate a name with each connection. You should avoid to use a class name of a model
-which is the same as the project name you've specified with ContentManager::setProject(). As then the query function will use
+The behavior is much same as the `Model::query()` function. But instaed of doing queriing data it will insert / updates datasets specified in the $query.
+Due to the behavior of RedBeanPHP, function `R::getAll()` won't behave as aspected in returning values for inserts and updates.
+So we use the function `R::exec()` to perfmin Create and Update calls.
+
+	- Modell:getModelObject($modelname)
+	
+This function allows you to instanciate an Model object defined by its name and located within the `model`direcotory as `modelname.php`.
+As the class `Model` will include the existing file you don't have to include files at yourself.
+	
+**Notice:**
+As the Model class will associate a name with each connection. You should avoid to use a class name of a model
+which is the same as the project name you've specified with `ContentManager::setProject()`. As then the query function will use
 the project database instead of a possible other database with the same name.
 
 If you want to have a model class for the entire database which is used for the ContentManagement with Database, just don't call
-the function ::buildConnection(). 
-It will then try to perform the query with your entire database specified with function ContentManager::setupORM().
+the function `Model::buildConnection()` within your constructor of the model class. 
+It will then try to perform the query with your entire database specified with function `ContentManager::setupORM()`.
 
-So how should a Model function be build?
+**So how should a Model function be build?**
 
-Following example:
+*Following example:*
 
-class library extends Model {
-
-	public function getDataX(){
-		$query = "SELECT * FROM data WHERE id = 1";
-		return $this->query($query);
-	}
-
-}
- 	
+    class library extends Model {
+    	public function getDataX(){
+    		$query = "SELECT * FROM data WHERE id = 1";
+    		return $this->query($query);
+    	}
+    }
  	
 That's all! 
 
 In addition you could of course use any kind of RedBeanPHP ORM functions within your controller, or even within your model to 
 retrieve Table data as obejcts or make directly SQL commands on your entire database. 
 
-Notice: If ContentManager::setORM() is not called, you should setup your database within your controller or model with R::setup() or R::addDatabase(). 
+**Notice:** If `ContentManager::setupORM()` is not called within your landing page `index.php`, you should setup your database within your controller or model with `R::setup()` or `R::addDatabase()`. 
+
+## Managing Access Control Layer with NetroWorksFramework 
+
+Once you've setup the project Database with `ContentManager::setupORM()` and initialized the UserManager with `ContentManager::setUserMode()`
+a very simple ACL is already setted up for use. 
+Basicly the concept is, that every user is assigned to a role. And a role has rights to access controller. 
+For every call, the UserManager will check if the assigned role for the role is allowed to access the requested controller. 
+If yes, the request will be passed to the controller. If no, the request will endup in calling either the `Controller::viewNotAllowed()` function,
+which also integrates a Webservice Json reply, when using as this Framework as a Webservice, or the requested controller specific and redefined function `[childclass]::viewNotAllowed()`.
+
+This is the logic behind controller access. 
+To manage ACL within your HTML output and show different content based on permissions, you can just make a simple condition via Smarty Template variables. 
+
+**Example:**
+*Following HTML block*
+
+    <body>
+    	<a href="link_to_somewhere">Klick</a>
+    	{if $allowed_for_secret_controller}
+    	<a href="link_to_secret_controller}">Pssst I'm secret!</a>
+    	{/if}
+    </body>
+
+**What will happen?**
+Every user (even guests are users with the role guest permissions) who is allowed to - have permissions - to access a specific controller will se the second link to `link_to_secret_controller`. 
+Every other user won't see it. 
+
+**How is this possible?**
+On every call, the UserManager assignes Smarty variable formed like `allowed_for_modulename_contentname` based on the permissions set for the role, which is assigned to the user.
+So on every HTML output content, you can manage the visibility through the Smarty conditional `if $allowed_for_modulename_contentname` and manage your ACL.
+
+## Using NetroWorksFramework as WebService API
+A second way in using this Framework is, to use it as a WebService API.
+
+The setup and how to call is absolutly the same as the way of a webapplication. The only thing you have to add is to add a Request HTTP-Header Attribute.
+Either you can choose to add the property "NetroWorksWebService:true" or change the `content-Type` to `application/json`. 
+Setting this into the HTTP-Header and passing json for input data will let the ContentManager return `json` formatted data. 
+
+Passing the json string named `jsonparams` will let the `ContentManager` add the json string values as array to the `$params` which will be passed to the requested controller function.
+The requested controller function shall just return an data assoc array which will then be converted from `ContentManager` into a json string which will then returned to the requester. 
+
+**Why should the controller function return just an assoc array of response?**
+*This is intended to keep those functions available for the whole project.*
+
+The core benefit of using NetroWorksFramework for building a WebService API is to benefit from the built-in UserManagement and Access Control Layer.
+You can specify a default controller function which holds the logic for authentication and let manage every request with the ACL implementation of NetroWorksFramework.
+
+*Doing so makes it - in my opinion - absolutly easy to manage rights for other systems interacting with your API.* 
+
+**For example:**
+If you have a project which shall be able to provide an api for external devices like Mobile Apps or other systems interacting with your project 
+and in addition if you want to provide a Webpage within that project: Manipulating or accessing data will become much more convenient to access through other controllers which are designed to 
+return HTML pages in using the function `Controller::getControllerObject()`. The return controller object could be the API controller which will await some `$params` and returns data as assoc arrays.
+
+### Webservice Class
+The `Webservice.class.php` is a parent class which provides functions to access other Webservice APIs build with NetroWorksFramework. 
+This class will initiate a curl object and do an authentication call on the distributed NetroWorksFramework Webservice API and then provide functions to specify which controller you want to request to and pass parameters to the call.
+
+**Following functions are provided for use:**
+
+- WebService::setRequestMethod($method)
+- WebService::setRequestParams($params)
+- WebService::setUrl($url)
+- WebService::setVerifyPeer($boolean)
+- WebService::setModule($module)
+- WebService::setContent($content)
+- WebService::setFunction($function)
+- WebService::exec()
+- WebService::getWebServiceObject($webservicename)
+
+As all other parent classes define your webservice class within the directory `webservice` to let the WebService return the webservice object which are located within that directory and named as passed.
+
+**Example Webservice class:**
+
+    class AnotherProjectAPI extends WebService {
+    	public function __construct(){
+    		require_once("/path/to/your/webservice/config_file/to/get/url/username/password");
+    		$config = <config_file::getConfig()>;
+    		parent::__construct($config['url'], $config['username'], $config['password']);
+    		$this->setModule("api");
+    		$this->setContent("data");
+    	}
+    	
+    	public function getDataX($id){
+    		$this->setFunction("getData");
+    		$this->setRequestParams(array("id"=>$id));
+    		$this->setRequestMethod("post");
+    		$this->setVerifyPeer(false); //Not recommended, but if you just have a selfsigned certificate, that's the only way to communicate with https
+    		$result = $this->exec();
+    		return json_decode($result, true);
+    	}
+    }
+
+
+#### Webservice Class Functions
+
+	- WebService::setRequestMethod($method)
+
+At this point only the HTTP Request methods `GET` and `POST` are implemented. Default request method is `POST`.
+
+	- WebService::setRequestParams($params)
+
+You can either pass an array or a single value. Each will be converted into a json string which will be as a value of the key `jsonparams`. 
+A single value will be transformed into a json using the function `json_encode(array("value" => $params))`.
+An array will be transformed into a json using the function `json_encode($params)`;
+
+	- WebService::setUrl($url)
+
+If you want to change the url, use this function.
+
+* **Notice:** Please ensure to pass only the URL till the landing page. Don't specify any Controller function as the completed URI 
+will be build after passing information with functions `WebService::setModule()`, `WebService::setContent()` and `WebService::setFunction()`.*
+
+	- WebService::setVerifyPeer($boolean)
+	
+This will set the `CURLOPT_VERIFYPEER`. In case you want to request via HTTPS, please consider this. 
+
+	- WebService::setModule($modulename)
+	- WebService::setContent($contentname)
+	- WebService::setFunction($functionname)
+
+These functions specifies the controller function within the Webservice API built with NetroWorksFramework.
+
+ 	- WebService::exec()
+
+As it says, it will execute the request and returns the plain value without converting it into an array or other format. 
+If you called the api correct and build the api controllers correctly then it will return the json.
+
+### Accessing the WebService from third party systems
+
+In case you want to access the webservice built with NetroWorksFramework, just ensure to send json data with header parameter `Content-Type:application/json`.
+That's it.
 
 
 ## Thank you

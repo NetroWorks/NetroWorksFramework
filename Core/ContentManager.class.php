@@ -56,9 +56,6 @@ class ContentManager extends Manager {
 		if(isset(self::$dbcheck) === false){	
 			self::$dbcheck = false;
 		}
-		if(isset($_SERVER['HTTP_NETROWORKSWEBSERVICE']) === true){
-			self::$webservicecall = true;
-		}
 		self::setupSmarty();
 		self::initializeContent();
 		self::parseRequest();
@@ -69,6 +66,7 @@ class ContentManager extends Manager {
 		self::loadController();
 		$return = self::performFunction();
 		if(self::isWebServiceCall()){
+			header('Content-Type: application/json');
 			print(json_encode($return));
 		}else{
 			self::loadSideControllers();
@@ -93,8 +91,13 @@ class ContentManager extends Manager {
 		}
 	}
 	
+	/**
+	 * Function to check if project was called as WebService or normal Webapplication request.
+	 * 
+	 * @return boolean
+	 */
 	public static function isWebServiceCall(){
-		if(self::$webservicecall === true){
+		if(isset($_SERVER['HTTP_NETROWORKSWEBSERVICE']) === true  || (isset($_SERVER['CONTENT_TYPE']) === true && preg_match('/json/', $_SERVER['CONTENT_TYPE'])) ){
 			return true;
 		}else{
 			return false;
@@ -108,8 +111,9 @@ class ContentManager extends Manager {
 	 */
 	private static function initializeContent(){
 		if(self::$dbcheck){
-			if(self::checkContentStructure() === false){
-				self::buildContentStructure();
+			$possible_controllers = self::checkContentStructure();
+			if(is_array($possible_controllers)){
+				self::buildContentStructure($possible_controllers);
 				UserManager::refreshInitialContent();
 			}
 		}
@@ -123,43 +127,33 @@ class ContentManager extends Manager {
 	 */
 	private static function checkContentStructure(){
 		$controllerpath = self::getProjectPath().'/controller/';
+		$possible_controllers = array();
 		$dirs = scandir($controllerpath);
-		foreach($dirs as $moduledir){
-			if($moduledir != '.' && $moduledir != '..' && is_dir($controllerpath.$moduledir)){
-				$possiblemodule = R::findOne('module', 'modulename = ?', array($moduledir));
-				if(!$possiblemodule->id){
-					return false;
-				}
-				$moduleids[] = $possiblemodule->id;
-				$contentfiles = scandir($controllerpath.$moduledir.'/');
-				foreach($contentfiles as $content){
-					if(is_file($controllerpath.$moduledir.'/'.$content)){
-						$tmp = explode(".", $content);
-						$contentname = $tmp[0];
-						$registeredContent = R::findOne('content', 'contentname = ?', array($contentname));
-						if(!$registeredContent->id){
-							return false;
-						}
-						$sharedcontent = $possiblemodule->sharedContentList[$registeredContent->id];
-						if(!$sharedcontent->id){
-							return false;
-						}
-						$contentids[] = $sharedcontent->id;
+		foreach($dirs as $key => $dir){
+			if(is_dir($controllerpath.$dir) && $dir != '.' && $dir != '..'){
+				$contents = scandir($controllerpath.$dir);
+				foreach($contents as $content){
+					if(preg_match('/\.php$/', $content)){
+						$content = explode('.', $content);
+						$content = $content[0];
+						$possible_controllers[] = array("module_name" => $dir,
+														"content_name" => $content);
 					}
 				}
 			}
 		}
-		if(is_array($moduleids)){
-			$invalidmodules = R::find('module', 'id NOT IN ('.R::genSlots($moduleids).')', $moduleids);
-			if(sizeof($invalidmodules) > 0){
-				return false;
+		$registered_controllers = R::find('controller');
+		if(empty($registered_controllers) === false){
+			if(count($possible_controllers) != sizeof($registered_controllers)){
+				return $possible_controllers;
 			}
-		}
-		if(is_array($contentids)){
-			$invalidcontents = R::find('content', 'id NOT IN ('.R::genSlots($contentids).')', $contentids);
-			if(sizeof($invalidcontents) > 0){
-				return false;
+			foreach($registered_controllers as $controller){
+				if(sizeof(array_keys($possible_controllers, array("module_name" => $controller->module->modulename, "content_name" => $controller->content->contentname))) == 0){
+					return $possible_controllers;
+				}
 			}
+		}elseif(sizeof($possible_controllers) > 0){
+			return $possible_controllers;
 		}
 		return true;
 	}
@@ -168,74 +162,67 @@ class ContentManager extends Manager {
 	 * After structure has been changed: this function will build the correct relations between modules and contents within database.
 	 * 
 	 */
-	private static function buildContentStructure(){
+	private static function buildContentStructure($possible_controllers){
+		R::freeze(false);
+		R::begin();
 		try{
-			$controllerpath = self::getProjectPath().'/controller/';
-			$possiblemodules = scandir($controllerpath);
-			$registeredmodules = R::findAll('module');
-			foreach($registeredmodules as $regmodule){
-				if(!in_array($regmodule->modulename, $possiblemodules)){
-					$dependingContents = $regmodule->sharedContentList;
-					foreach($dependingContents as $dependcontent){
-						$dependmodules = $dependcontent->withCondition('modulename != ?',array($regmodule->modulename))->sharedModuleList;
-						if(empty($dependmodules)){
-							R::trash($dependcontent);
-						}
-					}
-					R::trash($regmodule);
-				}else{
-					$dependingContents = $regmodule->sharedContentList;
-					$possiblecontent = scandir($controllerpath.$regmodule->modulename.'/');
-					foreach($dependingContents as $dependcontent){
-						if(!in_array($dependcontent->contentname.'.php', $possiblecontent)){
-							$dependmodules = $dependcontent->withCondition('modulename != ?',array($regmodule->modulename))->sharedModuleList;
-							unset($regmodule->sharedContentList[$dependcontent->id]);
-							R::store($regmodule);
-							if(empty($dependmodules)){
-								R::trash($dependcontent);
-							}
-						}
+			$registered_controllers = R::find('controller');
+			$controllers = array();
+			if(empty($registered_controllers)){
+				//Just to be sure, wipe all possible remaining data
+				R::wipe('controller');
+				R::wipe('module');
+				R::wipe('content');
+			}else{
+				foreach($registered_controllers as $key => $r_controller){
+					if(sizeof(array_keys($possible_controllers, array("module_name" => $r_controller->module->modulename, "content_name" => $r_controller->content->contentname))) == 0){
+						R::trash($r_controller);
+						unset($registered_controllers[$key]);
 					}
 				}
 			}
-			foreach($possiblemodules as $dirname){
-				if(is_dir($controllerpath.$dirname) && $dirname != '.' &&  $dirname != '..'){
-					$module = R::findOne('module', 'modulename = ?' , array($dirname));
-					if($module == null){
+			if(sizeof($possible_controllers) == 0){
+				R::wipe('controller');
+				R::wipe('module');
+				R::wipe('content');
+			}else{
+				$modules = array();
+				$contents = array();
+				foreach($possible_controllers as $p_controller){
+					$modules[$p_controller['module_name']] = true;
+					$module = R::findOne('module', 'modulename = ?', array($p_controller['module_name']));
+					if($module->id == 0){
 						$module = R::dispense('module');
-						$module->modulename = $dirname;
+						$module->modulename = $p_controller['module_name'];
+						$m_id = R::store($module);
+						$module = R::load('module', $m_id);
 					}
-					$possiblecontent = scandir($controllerpath.$dirname.'/');
-					foreach($possiblecontent as $file){
-						if(is_file($controllerpath.$dirname.'/'.$file)){
-							$tmp = explode('.', $file);
-							$contentname = $tmp[0];
-							$content = R::findOne('content', 'contentname = ?', array($contentname));
-							if($content == null){
-								$content = R::dispense('content');
-								$content->contentname = $contentname;
-								R::store($content);
-								$module->sharedContentList[] = $content;
-							}else{
-								$check = $content->withCondition('modulename = ?',array($module->modulename))->sharedModuleList;
-								if(empty($check)){
-									$module->sharedContentList[] = $content;
-								}
-							}
-						}
+					$contents[$p_controller['content_name']] = true;
+					$content = R::findOne('content', 'contentname = ?', array($p_controller['content_name']));
+					if($content->id == 0){
+						$content = R::dispense('content');
+						$content->contentname = $p_controller['content_name'];
+						$c_id = R::store($content);
+						$content = R::load('content', $c_id);
 					}
-					R::begin();
-					try{
-						R::store($module);
-						R::commit();
-					}catch(Exception $e){
-						R::rollback();
+					$controller = R::findOne('controller', 'content_id = :cid AND module_id = :mid', array(":mid" => $module->id, ":cid" => $content->id));
+					if($controller->id == 0){
+						$controller = R::dispense('controller');
+						$controller->module = $module;
+						$controller->content = $content;
 					}
+					$controllers[] = $controller;
 				}
+				R::storeAll($controllers);
+				R::exec('DELETE FROM content WHERE contentname NOT IN ('.R::genSlots(array_keys($contents)).')', array_keys($contents));
+				R::exec('DELETE FROM module WHERE modulename NOT IN ('.R::genSlots(array_keys($modules)).')', array_keys($modules));
 			}
 		}catch(Exception $e){
+			R::rollback();
 			exit("Error occured while building content structure. Contact your Development Team.");
 		}
+		R::freeze(true);
+		return true;
 	}
 	
 	/**

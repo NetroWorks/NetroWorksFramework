@@ -6,7 +6,7 @@ class WebService {
 	private $username;
 	private $password;
 	private $url;
-	private $request_method;
+	private $request_method = "POST";
 	private $request_params;
 	private $module;
 	private $content;
@@ -23,7 +23,7 @@ class WebService {
 		}
 	}
 	
-	public function __construct($url, $username, $password){
+	public function __construct($url, $username = false, $password = false){
 		$this->setUrl($url);
 		$this->username = $username;
 		$this->password = $password;
@@ -34,8 +34,9 @@ class WebService {
 		curl_setopt($this->ch, CURLOPT_COOKIESESSION, true);
 		curl_setopt($this->ch, CURLOPT_TIMEOUT, 120);
 		curl_setopt($this->ch, CURLOPT_CONNECTTIMEOUT, 30);
-		$this->auth();
-		
+		if($username != false && $password != false){
+			$this->auth();
+		}
 	}
 	
 	protected function auth(){ 
@@ -143,7 +144,8 @@ class WebService {
 		}else{
 			curl_setopt($this->ch, CURLOPT_URL, $this->getUrl().'?'.$this->getRequestParams());
 		}
-		curl_setopt($this->ch, CURLOPT_HTTPHEADER, array("NetroWorksWebService:".true));
+		curl_setopt($this->ch, CURLOPT_HTTPHEADER, array("NetroWorksWebService:".true,
+														"Content-Type:application/json"));
 		curl_setopt($this->ch, CURLOPT_RETURNTRANSFER, true);
 		$answer = curl_exec($this->ch);
 		if(curl_error($this->ch)){
